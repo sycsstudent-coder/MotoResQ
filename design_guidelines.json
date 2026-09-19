@@ -1,0 +1,185 @@
+{
+  "app_name": "MotoResQ",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A highly readable, stress-free utility interface designed for quick roadside action and garage maintenance.",
+  "color": {
+    "surface": "#F9FAFB",
+    "onSurface": "#111827",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1F2937",
+    "surfaceTertiary": "#F3F4F6",
+    "onSurfaceTertiary": "#374151",
+    "surfaceInverse": "#111827",
+    "onSurfaceInverse": "#F9FAFB",
+    "brand": "#D97706",
+    "onBrand": "#FFFFFF",
+    "brandPrimary": "#D97706",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#F59E0B",
+    "onBrandSecondary": "#111827",
+    "brandTertiary": "#FEF3C7",
+    "onBrandTertiary": "#92400E",
+    "success": "#16A34A",
+    "onSuccess": "#FFFFFF",
+    "warning": "#F59E0B",
+    "onWarning": "#FFFFFF",
+    "error": "#DC2626",
+    "onError": "#FFFFFF",
+    "info": "#4B5563",
+    "onInfo": "#FFFFFF",
+    "border": "#E5E7EB",
+    "borderStrong": "#D1D5DB",
+    "divider": "#F3F4F6",
+    "muted": "#6B7280"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Ensure ample spacing (md to lg) between actionable items to reduce accidental taps during emergency roadside usage. Maintain tight grouping for related motorcycle specs.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 1,
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use frosted glass overlay on the sticky bottom action buttons.",
+      "Use blur on the bottom tab bar when content scrolls beneath.",
+      "Apply glass effects to the AI Chat floating Voice recording overlay."
+    ],
+    "dont's": [
+      "Do not use blur on input fields, maintenance log cards, or anywhere it might reduce high-contrast readability."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Auth",
+      "purpose": "Secure email/password entry with minimal distraction.",
+      "states": {
+        "loading": "Centered brand-colored spinner.",
+        "empty": "N/A",
+        "error": "Inline red validation text below inputs."
+      },
+      "layout": "Vertical stack with top-aligned logo/hero image, generous lg padding. Inputs use surfaceTertiary with border thickness 1. Primary CTA sticky at bottom above keyboard."
+    },
+    {
+      "name": "Home",
+      "purpose": "Glanceable dashboard showing active motorcycle status and quick access to critical roadside tools.",
+      "states": {
+        "loading": "Skeleton of the motorcycle profile card and 4 action tiles.",
+        "empty": "Prompt to add a motorcycle profile.",
+        "error": "Card indicating offline status with cached data visible."
+      },
+      "layout": "Top sticky header with offline/online indicator. Hero card displaying the motorcycle (image + Make/Model/Odometer). Below, a 2-column grid for 'Diagnose' and 'Repair Guides', and full-width list items for 'Maintenance Log' and 'AI Chat'."
+    },
+    {
+      "name": "Diagnostics Flow",
+      "purpose": "A step-by-step Q&A wizard to identify roadside issues quickly.",
+      "states": {
+        "loading": "Spinner during result calculation.",
+        "empty": "N/A",
+        "error": "Error dialog with 'Retry' CTA if online AI fails (fallback to offline rules)."
+      },
+      "layout": "Progress bar at top. One question per screen (large typography), oversized touch targets (cards) for answers. 'Next'/'Skip' buttons sticky at the bottom."
+    },
+    {
+      "name": "Repair Guides",
+      "purpose": "Offline library of step-by-step mechanical fixes.",
+      "states": {
+        "loading": "List skeleton.",
+        "empty": "Illustration of wrench + 'No guides downloaded'.",
+        "error": "Error banner with reload icon."
+      },
+      "layout": "Search bar at top. Drill-down list using list items (minimum 56pt height). Detail page uses sticky header (glass) and numbered steps with safety warnings in muted/warning banners."
+    },
+    {
+      "name": "Maintenance Log",
+      "purpose": "Chronological history of repairs with a quick-entry form.",
+      "states": {
+        "loading": "List skeleton.",
+        "empty": "Empty state illustration with 'Log your first service' CTA.",
+        "error": "Inline retry button."
+      },
+      "layout": "Sectioned list by year/month. FAB for 'Add Service'. Add Service sheet is a single-column form (KeyboardAvoidingView) using numeric keyboards for odometer/cost. Sticky Save button."
+    },
+    {
+      "name": "AI Chat",
+      "purpose": "Conversational assistant for complex or specific queries with voice capabilities.",
+      "states": {
+        "loading": "Typing indicator (streaming replies).",
+        "empty": "Welcome message with suggested prompts (e.g., 'What does this engine noise mean?').",
+        "error": "Offline indicator with disabled input or cached responses."
+      },
+      "layout": "Standard chat interface. Messages use surfaceSecondary (user) and surfaceTertiary (AI). Each AI message includes a subtle TTS 'Speak' icon. Bottom input bar features a prominent Voice Record button (mic icon) that expands/pulses when active."
+    }
+  ],
+  "images": {
+    "hero_motorcycle_profile": {
+      "url": "https://images.unsplash.com/photo-1607091083645-31f4e28dc9af?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTJ8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0aWMlMjBtb3RvcmN5Y2xlJTIwcHJvZmlsZSUyMHN0dWRpbyUyMHNob3R8ZW58MHx8fHwxNzg5ODQ1NjYxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Clean minimal white and black motorcycle profile on dark background"
+    },
+    "repair_guides_cover": {
+      "url": "https://images.pexels.com/photos/8550664/pexels-photo-8550664.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Mechanic hands repairing motorcycle engine with wrench"
+    },
+    "dashboard_detail": {
+      "url": "https://images.unsplash.com/photo-1571534402214-7b4dd10f0c7f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwyfHxjbGVhbiUyMG1vZGVybiUyMG1vdG9yY3ljbGUlMjBkYXNoYm9hcmQlMjBkZXRhaWx8ZW58MHx8fHwxNzg5ODQ1NjYxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Clean modern motorcycle dashboard instrument cluster"
+    },
+    "empty_maintenance": {
+      "url": "https://images.pexels.com/photos/416412/pexels-photo-416412.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Clean shiny chrome wrenches arranged minimally"
+    }
+  },
+  "haptics": {
+    "primary_button": "impactLight",
+    "tab_press": "selection",
+    "voice_record_start": "impactMedium",
+    "voice_record_stop": "impactLight",
+    "diagnostics_selection": "selection",
+    "success_log": "notificationSuccess"
+  },
+  "instructions_to_main_agent": [
+    "Prioritize extreme readability. This app will be used in harsh lighting conditions (bright sun on the roadside, or dark garage).",
+    "Utilize large tap targets (minimum 44x44pt, preferably 56pt) for all lists and core actions (Diagnose, Repair) to accommodate gloved or dirty hands.",
+    "Implement the 'Offline-First' architecture visibly. Show a subtle 'Offline Mode' indicator in the Home header when disconnected. Disable only AI Chat if no local model is available, but keep Guides and Diagnostics fully functional.",
+    "For the AI Chat, integrate a clear UI state for Voice Input (expanding mic button) and a TTS output button on every Claude response.",
+    "Use Phosphor icons (filled for active tabs/states, regular for inactive) to maintain a clean, technical iOS aesthetic.",
+    "All forms (Add Maintenance, Auth) must use KeyboardAvoidingView and feature a sticky primary CTA at the bottom.",
+    "Ensure 'Ochre/Amber' (brand color) is used sparingly for primary actions, warnings, and highlighting critical components to provide a technical, automotive utility feel."
+  ]
+}
