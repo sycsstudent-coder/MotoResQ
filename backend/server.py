@@ -1,14 +1,16 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, Response
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, Response, UploadFile, File, Query
+from fastapi.concurrency import run_in_threadpool
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import uuid
-import hashlib
+import tempfile
+import requests
 from pathlib import Path
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 import bcrypt
@@ -28,7 +30,56 @@ JWT_ALG = "HS256"
 JWT_EXP_MIN = int(os.getenv("JWT_EXPIRE_MINUTES", "10080"))
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
-app = FastAPI(title="MotoResQ API")
+# Emergent Object Storage
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+APP_NAME = "motoresq"
+storage_key: Optional[str] = None
+
+def init_storage() -> str:
+    global storage_key
+    if storage_key:
+        return storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+    resp.raise_for_status()
+    storage_key = resp.json()["storage_key"]
+    return storage_key
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(f"{STORAGE_URL}/objects/{path}",
+                        headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
+    if resp.status_code == 402:
+        raise HTTPException(402, "Storage credits exhausted — photo upload unavailable right now")
+    resp.raise_for_status()
+    return resp.json()
+
+def get_object(path: str) -> tuple:
+    global storage_key
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    if resp.status_code == 503:
+        storage_key = None
+        key = init_storage()
+        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await db.users.create_index("email", unique=True)
+    await db.users.create_index("id", unique=True)
+    await db.maintenance.create_index([("user_id", 1), ("date", -1)])
+    await db.chat_messages.create_index([("user_id", 1), ("session_id", 1), ("created_at", 1)])
+    await db.emergency_contacts.create_index([("user_id", 1), ("created_at", 1)])
+    try:
+        await run_in_threadpool(init_storage)
+    except Exception as e:
+        logging.warning("storage init failed: %s", e)
+    yield
+    client.close()
+
+app = FastAPI(title="MotoResQ API", lifespan=lifespan)
 api = APIRouter(prefix="/api")
 
 # ---------- Models ----------
@@ -46,6 +97,18 @@ class PublicUser(BaseModel):
     email: EmailStr
     name: Optional[str] = None
     motorcycle: Optional[Dict[str, Any]] = None
+    bike_photo: Optional[str] = None
+
+class OdometerIn(BaseModel):
+    odometer: int
+
+class ContactIn(BaseModel):
+    name: str
+    phone: str
+    kind: str = "personal"  # tow | roadside | personal
+
+class ContactOut(ContactIn):
+    id: str
 
 class TokenOut(BaseModel):
     access_token: str
@@ -117,8 +180,14 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
 def public_user(u: dict) -> PublicUser:
     return PublicUser(
         id=u["id"], email=u["email"], name=u.get("name"),
-        motorcycle=u.get("motorcycle"),
+        motorcycle=u.get("motorcycle"), bike_photo=u.get("bike_photo"),
     )
+
+def user_from_token(token: str) -> Optional[str]:
+    try:
+        return pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])["sub"]
+    except Exception:
+        return None
 
 # ---------- Auth ----------
 @api.post("/auth/signup", response_model=TokenOut)
@@ -159,6 +228,146 @@ async def update_motorcycle(body: MotorcycleIn, user: dict = Depends(get_current
     user["motorcycle"] = moto
     return public_user(user)
 
+@api.patch("/motorcycle/odometer", response_model=PublicUser)
+async def update_odometer(body: OdometerIn, user: dict = Depends(get_current_user)):
+    if not user.get("motorcycle"):
+        raise HTTPException(400, "Add your motorcycle first")
+    if body.odometer < 0:
+        raise HTTPException(400, "Odometer must be positive")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"motorcycle.odometer": body.odometer}})
+    user["motorcycle"]["odometer"] = body.odometer
+    return public_user(user)
+
+IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic"}
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+@api.post("/motorcycle/photo", response_model=PublicUser)
+async def upload_bike_photo(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    ct = (file.content_type or "").lower()
+    ext = IMAGE_TYPES.get(ct) or Path(file.filename or "").suffix.lstrip(".").lower()
+    if ext not in IMAGE_TYPES.values():
+        raise HTTPException(415, "Please upload a JPG, PNG or WEBP image")
+    data = await file.read(MAX_IMAGE_BYTES + 1)
+    if not data:
+        raise HTTPException(400, "Empty file")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, "Image must be under 8 MB")
+    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+    try:
+        result = await run_in_threadpool(put_object, path, data, ct or "image/jpeg")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception("photo upload failed")
+        raise HTTPException(502, f"Photo upload failed: {str(e)[:120]}")
+    stored = result.get("path", path)
+    await db.users.update_one({"id": user["id"]}, {"$set": {"bike_photo": stored}})
+    user["bike_photo"] = stored
+    return public_user(user)
+
+@api.get("/files/{path:path}")
+async def get_file(path: str, token: Optional[str] = Query(None), authorization: Optional[str] = Header(None)):
+    raw = token or (authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else None)
+    uid = user_from_token(raw) if raw else None
+    if not uid:
+        raise HTTPException(401, "Unauthorized")
+    owner = await db.users.find_one({"id": uid, "bike_photo": path}, {"_id": 0, "id": 1})
+    if not owner:
+        raise HTTPException(404, "File not found")
+    try:
+        content, ct = await run_in_threadpool(get_object, path)
+    except Exception:
+        logging.exception("file fetch failed")
+        raise HTTPException(502, "Could not load file")
+    return Response(content=content, media_type=ct, headers={"Cache-Control": "private, max-age=86400"})
+
+# ---------- Emergency contacts ----------
+@api.get("/emergency/contacts", response_model=List[ContactOut])
+async def list_contacts(user: dict = Depends(get_current_user)):
+    docs = await db.emergency_contacts.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", 1).to_list(50)
+    return docs
+
+@api.post("/emergency/contacts", response_model=ContactOut)
+async def add_contact(body: ContactIn, user: dict = Depends(get_current_user)):
+    name, phone = body.name.strip(), body.phone.strip()
+    if not name or not phone:
+        raise HTTPException(400, "Name and phone are required")
+    if body.kind not in ("tow", "roadside", "personal"):
+        raise HTTPException(400, "Invalid contact type")
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "name": name, "phone": phone, "kind": body.kind,
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.emergency_contacts.insert_one(doc)
+    return ContactOut(id=doc["id"], name=name, phone=phone, kind=body.kind)
+
+@api.delete("/emergency/contacts/{cid}")
+async def delete_contact(cid: str, user: dict = Depends(get_current_user)):
+    r = await db.emergency_contacts.delete_one({"id": cid, "user_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
+
+# ---------- Service reminders ----------
+SERVICE_SCHEDULE = [
+    {"id": "oil", "label": "Engine oil change", "interval_km": 5000, "icon": "oil", "keywords": ["oil"]},
+    {"id": "chain_lube", "label": "Chain clean & lube", "interval_km": 800, "icon": "link-variant", "keywords": ["lube", "lubric"]},
+    {"id": "chain_adjust", "label": "Chain tension check", "interval_km": 1500, "icon": "cog-outline", "keywords": ["chain adjust", "tension", "slack"]},
+    {"id": "tire", "label": "Tire inspection / pressure", "interval_km": 3000, "icon": "tire", "keywords": ["tire", "tyre"]},
+    {"id": "brake", "label": "Brake pads & fluid", "interval_km": 10000, "icon": "car-brake-alert", "keywords": ["brake"]},
+    {"id": "air_filter", "label": "Air filter", "interval_km": 12000, "icon": "air-filter", "keywords": ["air filter", "air-filter"]},
+    {"id": "spark", "label": "Spark plug", "interval_km": 15000, "icon": "flash-outline", "keywords": ["spark"]},
+    {"id": "coolant", "label": "Coolant flush", "interval_km": 24000, "icon": "thermometer", "keywords": ["coolant"]},
+]
+STATUS_RANK = {"overdue": 0, "due_soon": 1, "unknown": 2, "ok": 3}
+
+def match_service(service_type: str) -> Optional[str]:
+    s = service_type.lower()
+    for svc in SERVICE_SCHEDULE:
+        if any(k in s for k in svc["keywords"]):
+            return svc["id"]
+    return None
+
+@api.get("/reminders")
+async def reminders(user: dict = Depends(get_current_user)):
+    moto = user.get("motorcycle")
+    odo = int(moto.get("odometer", 0)) if moto else 0
+    logs = await db.maintenance.find({"user_id": user["id"]}, {"_id": 0}).to_list(1000)
+    last: Dict[str, dict] = {}
+    for log in logs:
+        sid = match_service(log.get("service_type", ""))
+        if not sid:
+            continue
+        cur = last.get(sid)
+        if not cur or (log.get("odometer", 0), log.get("date", "")) > (cur.get("odometer", 0), cur.get("date", "")):
+            last[sid] = log
+    items = []
+    for svc in SERVICE_SCHEDULE:
+        entry = {"id": svc["id"], "label": svc["label"], "interval_km": svc["interval_km"], "icon": svc["icon"],
+                 "log_type": svc["label"]}
+        lg = last.get(svc["id"])
+        if not lg:
+            entry.update({"status": "unknown", "last_odometer": None, "last_date": None, "due_at_km": None,
+                          "remaining_km": None, "progress": 0,
+                          "message": "No record yet — log your last service to start tracking"})
+        else:
+            last_odo = int(lg.get("odometer", 0))
+            due_at = last_odo + svc["interval_km"]
+            remaining = due_at - odo
+            progress = max(0.0, min(1.0, (odo - last_odo) / svc["interval_km"]))
+            if remaining < 0:
+                status, msg = "overdue", f"Overdue by {abs(remaining):,} km"
+            elif remaining <= max(int(svc["interval_km"] * 0.15), 100):
+                status, msg = "due_soon", f"Due in {remaining:,} km"
+            else:
+                status, msg = "ok", f"Next in {remaining:,} km"
+            entry.update({"status": status, "last_odometer": last_odo, "last_date": lg.get("date"),
+                          "due_at_km": due_at, "remaining_km": remaining, "progress": round(progress, 3), "message": msg})
+        items.append(entry)
+    items.sort(key=lambda x: (STATUS_RANK[x["status"]], x["remaining_km"] if x["remaining_km"] is not None else 10**9))
+    summary = {"overdue": sum(i["status"] == "overdue" for i in items),
+               "due_soon": sum(i["status"] == "due_soon" for i in items),
+               "tracked": sum(i["status"] != "unknown" for i in items)}
+    return {"odometer": odo, "has_motorcycle": bool(moto), "summary": summary, "items": items}
+
 # ---------- Maintenance ----------
 @api.get("/maintenance", response_model=List[MaintenanceOut])
 async def list_maintenance(user: dict = Depends(get_current_user)):
@@ -188,224 +397,7 @@ async def delete_maintenance(item_id: str, user: dict = Depends(get_current_user
     return {"ok": True}
 
 # ---------- Static: diagnostic questionnaire & repair guides ----------
-DIAG_TREE = {
-    "wont_start": {
-        "title": "Won't Start",
-        "questions": [
-            {"id": "battery_lights", "q": "Do the dashboard lights turn on when you turn the key?",
-             "options": [{"v": "no", "l": "No lights at all"}, {"v": "dim", "l": "Dim / weak lights"}, {"v": "yes", "l": "Bright lights"}]},
-            {"id": "starter_sound", "q": "When you press the start button, what do you hear?",
-             "options": [{"v": "nothing", "l": "Nothing"}, {"v": "click", "l": "Clicking sound"}, {"v": "cranks", "l": "Engine cranks but no start"}]},
-            {"id": "fuel", "q": "Do you have fuel in the tank?",
-             "options": [{"v": "yes", "l": "Yes, plenty"}, {"v": "low", "l": "Very low"}, {"v": "unsure", "l": "Not sure"}]},
-        ],
-        "rules": [
-            {"if": {"battery_lights": "no"}, "cause": "Dead battery or loose battery terminals", "severity": "medium", "guide_id": "battery"},
-            {"if": {"battery_lights": "dim", "starter_sound": "click"}, "cause": "Weak battery — not enough charge to crank", "severity": "medium", "guide_id": "battery"},
-            {"if": {"fuel": "low"}, "cause": "Out of fuel or fuel pump not priming", "severity": "low", "guide_id": "fuel"},
-            {"if": {"starter_sound": "cranks"}, "cause": "Fuel or ignition issue — spark plug or fuel delivery", "severity": "medium", "guide_id": "spark_plug"},
-        ],
-    },
-    "overheating": {
-        "title": "Overheating",
-        "questions": [
-            {"id": "coolant", "q": "Is coolant level in the reservoir low?",
-             "options": [{"v": "yes", "l": "Yes, very low"}, {"v": "no", "l": "No, level is fine"}, {"v": "unsure", "l": "Not sure"}]},
-            {"id": "fan", "q": "Is the radiator fan running when hot?",
-             "options": [{"v": "yes", "l": "Yes"}, {"v": "no", "l": "No"}, {"v": "unsure", "l": "Cannot tell"}]},
-        ],
-        "rules": [
-            {"if": {"coolant": "yes"}, "cause": "Low coolant — possible leak in system", "severity": "high", "guide_id": "coolant"},
-            {"if": {"fan": "no"}, "cause": "Radiator fan not working — check fuse and relay", "severity": "high", "guide_id": "cooling_fan"},
-        ],
-    },
-    "brakes": {
-        "title": "Brake Issues",
-        "questions": [
-            {"id": "feel", "q": "How does the brake lever feel?",
-             "options": [{"v": "spongy", "l": "Spongy / soft"}, {"v": "hard", "l": "Very hard"}, {"v": "normal", "l": "Normal but weak"}]},
-            {"id": "noise", "q": "Any noise when braking?",
-             "options": [{"v": "squeal", "l": "Squealing / grinding"}, {"v": "none", "l": "No noise"}]},
-        ],
-        "rules": [
-            {"if": {"feel": "spongy"}, "cause": "Air in brake lines — needs bleeding", "severity": "high", "guide_id": "brake_bleed"},
-            {"if": {"noise": "squeal"}, "cause": "Worn brake pads", "severity": "high", "guide_id": "brake_pads"},
-        ],
-    },
-    "flat_tire": {
-        "title": "Flat Tire",
-        "questions": [
-            {"id": "puncture", "q": "Can you see a nail or object in the tire?",
-             "options": [{"v": "yes", "l": "Yes"}, {"v": "no", "l": "No"}]},
-            {"id": "side", "q": "Is the damage on the tread or sidewall?",
-             "options": [{"v": "tread", "l": "Tread (center)"}, {"v": "sidewall", "l": "Sidewall"}, {"v": "unsure", "l": "Not sure"}]},
-        ],
-        "rules": [
-            {"if": {"side": "sidewall"}, "cause": "Sidewall damage — tire cannot be safely repaired, replace", "severity": "high", "guide_id": "tire_replace"},
-            {"if": {"puncture": "yes", "side": "tread"}, "cause": "Tread puncture — plug kit can get you home", "severity": "medium", "guide_id": "tire_plug"},
-        ],
-    },
-    "chain": {
-        "title": "Chain / Drive",
-        "questions": [
-            {"id": "slack", "q": "How much slack does the chain have (up-down play at midpoint)?",
-             "options": [{"v": "loose", "l": "Very loose (>50mm)"}, {"v": "ok", "l": "About right (20-30mm)"}, {"v": "tight", "l": "Very tight"}]},
-            {"id": "lube", "q": "Is the chain dry, rusty, or dirty?",
-             "options": [{"v": "yes", "l": "Yes"}, {"v": "no", "l": "No, looks clean and oiled"}]},
-        ],
-        "rules": [
-            {"if": {"slack": "loose"}, "cause": "Chain too loose — needs adjustment", "severity": "medium", "guide_id": "chain_adjust"},
-            {"if": {"slack": "tight"}, "cause": "Chain over-tight — will damage sprockets", "severity": "medium", "guide_id": "chain_adjust"},
-            {"if": {"lube": "yes"}, "cause": "Chain needs cleaning and lubrication", "severity": "low", "guide_id": "chain_lube"},
-        ],
-    },
-    "electrical": {
-        "title": "Electrical",
-        "questions": [
-            {"id": "which", "q": "What is not working?",
-             "options": [{"v": "headlight", "l": "Headlight"}, {"v": "indicators", "l": "Indicators"}, {"v": "horn", "l": "Horn"}, {"v": "all", "l": "Nothing electrical works"}]},
-        ],
-        "rules": [
-            {"if": {"which": "all"}, "cause": "Main fuse blown or dead battery", "severity": "medium", "guide_id": "fuse"},
-            {"if": {"which": "headlight"}, "cause": "Blown headlight bulb or fuse", "severity": "low", "guide_id": "fuse"},
-            {"if": {"which": "indicators"}, "cause": "Flasher relay or bulb failed", "severity": "low", "guide_id": "fuse"},
-            {"if": {"which": "horn"}, "cause": "Horn fuse or wiring issue", "severity": "low", "guide_id": "fuse"},
-        ],
-    },
-}
-
-REPAIR_GUIDES = {
-    "battery": {"id": "battery", "title": "Jump-start or Replace Battery", "category": "Electrical", "time": "15 min", "difficulty": "Easy",
-        "tools": ["Multimeter (optional)", "Spanner set", "Jumper cables or a helper bike"],
-        "warnings": ["Never short battery terminals with metal tools.", "Wear safety glasses — batteries can vent hydrogen gas."],
-        "steps": [
-            "Turn ignition off and remove the key.",
-            "Locate the battery (under the seat on most bikes).",
-            "Check terminals for corrosion — clean with a wire brush if needed.",
-            "Reconnect terminals tight: positive (+) first, then negative (-).",
-            "If dead, connect jumper cables to a running vehicle (12V): + to +, - to a metal frame ground.",
-            "Try to start the bike. Let it run 15-20 minutes to recharge, or ride to a shop.",
-        ]},
-    "fuel": {"id": "fuel", "title": "Fuel System — Empty Tank / Priming", "category": "Engine", "time": "10 min", "difficulty": "Easy",
-        "tools": ["Fuel container", "Funnel"],
-        "warnings": ["Do not smoke or use open flames near fuel.", "Fuel vapors are flammable — refuel in ventilated areas."],
-        "steps": [
-            "Confirm fuel gauge or dip stick reading.",
-            "Add at least 1 litre of the correct octane petrol.",
-            "Turn ignition to ON position (do not crank) — listen for fuel pump prime (2-3 seconds).",
-            "Wait for the pump to complete, then start engine.",
-            "If still won't start, fuel pump or filter may be at fault.",
-        ]},
-    "spark_plug": {"id": "spark_plug", "title": "Inspect and Replace Spark Plug", "category": "Engine", "time": "30 min", "difficulty": "Medium",
-        "tools": ["Spark plug socket & extension", "Torque wrench", "Feeler gauge", "New spark plug (correct heat range)"],
-        "warnings": ["Let the engine cool completely before removing plugs.", "Do not overtighten — it can strip the head threads."],
-        "steps": [
-            "Remove the fuel tank or side panel to access plugs (varies by bike).",
-            "Pull the plug cap straight up.",
-            "Use a spark plug socket to unscrew the plug counter-clockwise.",
-            "Inspect: black soot = rich mixture, white = lean/overheating, wet = fouled.",
-            "Gap new plug per manual (usually 0.7-0.9mm).",
-            "Screw in by hand first, then torque to manufacturer spec (~13 Nm).",
-            "Refit cap firmly.",
-        ]},
-    "coolant": {"id": "coolant", "title": "Top-up Coolant Safely", "category": "Cooling", "time": "10 min", "difficulty": "Easy",
-        "tools": ["Coolant (50/50 pre-mix)", "Funnel"],
-        "warnings": ["NEVER open the radiator cap while hot — scalding fluid will spray out.", "Wait until engine is fully cool (30+ min)."],
-        "steps": [
-            "Park on level ground, engine cold.",
-            "Locate the reservoir — usually a translucent tank marked MIN/MAX.",
-            "Top up to just below MAX with pre-mixed coolant.",
-            "Check the radiator for leaks — look for green/pink stains under the bike.",
-            "If reservoir empties again quickly, do not ride — get it towed.",
-        ]},
-    "cooling_fan": {"id": "cooling_fan", "title": "Radiator Fan Not Running", "category": "Cooling", "time": "20 min", "difficulty": "Medium",
-        "tools": ["Multimeter", "Spare fuse", "Spanner set"],
-        "warnings": ["Hot components — allow to cool.", "Do not operate the bike with a non-working fan in slow traffic."],
-        "steps": [
-            "Locate the fan fuse in the fusebox (see owner's manual).",
-            "Pull fuse and check with multimeter or visually — replace if blown.",
-            "If fuse is fine, tap the fan blade gently while stationary — sometimes the motor bearings stick.",
-            "Check the fan sensor connector for corrosion.",
-            "If still not working, replace the fan motor or relay.",
-        ]},
-    "brake_bleed": {"id": "brake_bleed", "title": "Bleed Brakes (Remove Air)", "category": "Brakes", "time": "45 min", "difficulty": "Medium",
-        "tools": ["Brake fluid (correct DOT rating)", "Clear hose", "Container", "Spanner"],
-        "warnings": ["DOT brake fluid damages paint — wipe up spills immediately.", "Use only the fluid grade specified by the manufacturer."],
-        "steps": [
-            "Top up the master cylinder to MAX with fresh fluid.",
-            "Attach clear hose to caliper bleed nipple, other end into container.",
-            "Squeeze brake lever, hold; open nipple 1/4 turn; close nipple; release lever. Repeat.",
-            "Watch for air bubbles in the hose — continue until fluid runs clear.",
-            "Keep the master cylinder topped up throughout — do not let it run dry.",
-            "Tighten bleed nipple, test lever firmness before riding.",
-        ]},
-    "brake_pads": {"id": "brake_pads", "title": "Replace Brake Pads", "category": "Brakes", "time": "40 min", "difficulty": "Medium",
-        "tools": ["Allen key set", "Pin punch", "New brake pads (matched to model)"],
-        "warnings": ["Bed in new pads gently for the first 100km — no hard stops.", "Do not touch the friction surface with oily hands."],
-        "steps": [
-            "Remove the caliper mounting bolts.",
-            "Slide caliper off the disc carefully — do not let it hang by the hose.",
-            "Push out the retaining pin and remove old pads.",
-            "Push caliper pistons back in slowly using a plastic tool.",
-            "Insert new pads and refit retaining pin.",
-            "Bolt caliper back on to spec torque.",
-            "Pump brake lever until firm before moving the bike.",
-        ]},
-    "tire_replace": {"id": "tire_replace", "title": "Tire Replacement (Get Towed)", "category": "Tires", "time": "Shop visit", "difficulty": "Hard",
-        "tools": ["Call for roadside assistance"],
-        "warnings": ["A damaged sidewall can blow out under load — do NOT ride the bike.", "Motorcycle tire changes require specialist balancing equipment."],
-        "steps": [
-            "Do not ride. Sidewall damage is not repairable.",
-            "Call roadside assistance or a friend with a truck.",
-            "At the shop, replace the tire with the correct size (sidewall marking).",
-            "Have both wheels balanced.",
-        ]},
-    "tire_plug": {"id": "tire_plug", "title": "Emergency Tire Plug Repair", "category": "Tires", "time": "20 min", "difficulty": "Medium",
-        "tools": ["Tire plug kit", "CO2 inflator or 12V pump", "Pliers"],
-        "warnings": ["A plug is a temporary fix — replace the tire soon after.", "Do not exceed 80 km/h on a plugged tire.", "Sidewall plugs are UNSAFE."],
-        "steps": [
-            "Locate the puncture — spraying soapy water helps find leaks.",
-            "Remove the object with pliers.",
-            "Use the reamer tool to clean out the hole.",
-            "Coat a plug strip with rubber cement and thread it into the insertion tool.",
-            "Push the tool firmly into the hole until half the plug is inside; twist and pull out.",
-            "Trim excess plug flush with the tread.",
-            "Inflate to recommended pressure and check for leaks.",
-        ]},
-    "chain_adjust": {"id": "chain_adjust", "title": "Adjust Chain Slack", "category": "Drivetrain", "time": "30 min", "difficulty": "Medium",
-        "tools": ["Spanner set", "Ruler", "Torque wrench"],
-        "warnings": ["Wheel alignment marks on the swingarm — keep both sides equal.", "Chain tension is measured with rider weight ON the bike (or per manual)."],
-        "steps": [
-            "Put bike on paddock stand or centre stand.",
-            "Loosen the rear axle nut half a turn.",
-            "Loosen the lock nuts on both chain adjusters.",
-            "Turn adjuster bolts equally on each side to move the wheel back or forward.",
-            "Aim for 20-30mm of vertical play at chain midpoint (verify manual).",
-            "Tighten lock nuts, torque axle nut to spec (typically 90-100 Nm).",
-        ]},
-    "chain_lube": {"id": "chain_lube", "title": "Clean and Lubricate Chain", "category": "Drivetrain", "time": "20 min", "difficulty": "Easy",
-        "tools": ["Chain cleaner spray", "Rag", "Chain lube (O-ring safe)"],
-        "warnings": ["Never lube a hot chain from a hard ride — wait to cool slightly.", "Keep spray away from tire and brake disc."],
-        "steps": [
-            "Warm the chain by rolling the bike a few meters.",
-            "Spray chain cleaner while slowly rotating the rear wheel.",
-            "Scrub with soft brush, wipe clean with a rag.",
-            "Apply chain lube evenly to the inside of the chain while rotating.",
-            "Let it soak in for 5 minutes.",
-            "Wipe off excess to prevent fling on your rim.",
-        ]},
-    "fuse": {"id": "fuse", "title": "Check and Replace a Fuse", "category": "Electrical", "time": "10 min", "difficulty": "Easy",
-        "tools": ["Fuse puller (usually in fuse box)", "Spare fuses (same rating)"],
-        "warnings": ["Never replace with a higher-rated fuse — will damage wiring.", "If the new fuse blows immediately, there is a short circuit — do not force it."],
-        "steps": [
-            "Find the fuse box (owner's manual will show location).",
-            "Match the affected item to the fuse label.",
-            "Pull the suspect fuse.",
-            "Check visually — a broken filament means it's blown.",
-            "Replace with a fuse of the exact same amp rating.",
-            "Test the circuit.",
-        ]},
-}
+from data import DIAG_TREE, REPAIR_GUIDES
 
 @api.get("/diagnostic/categories")
 async def diag_categories():
@@ -531,6 +523,48 @@ async def tts(body: TTSIn, user: dict = Depends(get_current_user)):
     return Response(content=audio, media_type="audio/mpeg",
                     headers={"Cache-Control": "no-store"})
 
+# ---------- STT (Whisper) ----------
+AUDIO_EXTS = {".m4a", ".mp4", ".webm", ".wav", ".mp3", ".mpeg", ".mpga", ".ogg"}
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
+STT_PROMPT = "A motorcycle rider describing symptoms: engine, starter, battery, chain, brakes, clutch, coolant, tire, fuel, carburetor, spark plug."
+
+@api.post("/transcriptions")
+async def transcribe(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "STT not configured")
+    data = await file.read(MAX_AUDIO_BYTES + 1)
+    if not data:
+        raise HTTPException(400, "Empty audio")
+    if len(data) > MAX_AUDIO_BYTES:
+        raise HTTPException(413, "Audio must be under 25 MB")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in AUDIO_EXTS:
+        ct = (file.content_type or "").lower()
+        suffix = ".webm" if "webm" in ct else ".wav" if "wav" in ct else ".m4a"
+    try:
+        from emergentintegrations.llm.openai import OpenAISpeechToText
+    except Exception as e:
+        raise HTTPException(500, f"STT library error: {e}")
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+        with open(tmp_path, "rb") as fh:
+            result = await stt.transcribe(fh, model="whisper-1", prompt=STT_PROMPT)
+        text = result.text if hasattr(result, "text") else (result.get("text", "") if isinstance(result, dict) else str(result))
+    except Exception as e:
+        logging.exception("stt failed")
+        raise HTTPException(502, f"Transcription failed: {str(e)[:160]}")
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    return {"text": (text or "").strip()}
+
 # ---------- Health ----------
 @api.get("/")
 async def root():
@@ -549,14 +583,3 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-@app.on_event("startup")
-async def _startup():
-    await db.users.create_index("email", unique=True)
-    await db.users.create_index("id", unique=True)
-    await db.maintenance.create_index([("user_id", 1), ("date", -1)])
-    await db.chat_messages.create_index([("user_id", 1), ("session_id", 1), ("created_at", 1)])
-
-@app.on_event("shutdown")
-async def _shutdown():
-    client.close()

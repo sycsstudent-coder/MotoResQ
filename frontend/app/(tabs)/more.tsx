@@ -31,10 +31,12 @@ export default function More() {
       </View>
 
       <Text style={styles.section}>Your bike</Text>
-      <Row testID="menu-motorcycle" icon="motorbike" label="Motorcycle profile" onPress={() => router.push("/motorcycle-setup")} />
+      <Row testID="menu-motorcycle" icon="motorbike" label="Motorcycle profile & photo" onPress={() => router.push("/motorcycle-setup")} />
       <Row testID="menu-maintenance" icon="clipboard-text-clock-outline" label="Maintenance log" onPress={() => router.push("/maintenance")} />
+      <Row testID="menu-reminders" icon="bell-ring-outline" label="Service reminders" onPress={() => router.push("/reminders")} />
 
-      <Text style={styles.section}>Assistant</Text>
+      <Text style={styles.section}>Help</Text>
+      <Row testID="menu-sos" icon="alert-octagon-outline" label="Emergency SOS & contacts" onPress={() => router.push("/sos")} />
       <Row testID="menu-chat" icon="robot-happy-outline" label="AI Chat" onPress={() => router.push("/ai-chat")} />
 
       <Text style={styles.section}>Account</Text>

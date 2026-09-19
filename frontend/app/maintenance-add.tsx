@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
 import Icon from "@react-native-vector-icons/material-design-icons";
 import { makeStyles, useTheme } from "@/src/theme";
@@ -15,11 +15,12 @@ export default function MaintenanceAdd() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const params = useLocalSearchParams<{ type?: string; odo?: string }>();
 
   const today = new Date().toISOString().slice(0, 10);
-  const [type, setType] = useState("");
+  const [type, setType] = useState(params.type || "");
   const [date, setDate] = useState(today);
-  const [odo, setOdo] = useState("");
+  const [odo, setOdo] = useState(params.odo || "");
   const [cost, setCost] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,6 +41,7 @@ export default function MaintenanceAdd() {
         }),
       });
       qc.invalidateQueries({ queryKey: ["maintenance"] });
+      qc.invalidateQueries({ queryKey: ["reminders"] });
       router.back();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };

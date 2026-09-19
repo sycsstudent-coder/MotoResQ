@@ -3,11 +3,12 @@ import { View, Text, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Pla
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import Icon from "@react-native-vector-icons/material-design-icons";
-import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
+import { createAudioPlayer, setAudioModeAsync, AudioModule, RecordingPresets, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import { makeStyles, useTheme } from "@/src/theme";
-import { api } from "@/src/api";
+import { api, uploadFile } from "@/src/api";
 import { useAuth } from "@/src/auth-context";
 import { readToken } from "@/src/token";
+import { PermissionPrompt, PermissionMode } from "@/src/components/permission-prompt";
 
 interface Msg { role: "user" | "assistant"; content: string; id: string }
 
@@ -36,12 +37,64 @@ export default function AIChat() {
   const [busy, setBusy] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
 
+  // Voice input (Whisper STT)
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recState = useAudioRecorderState(recorder);
+  const [transcribing, setTranscribing] = useState(false);
+  const [micPerm, setMicPerm] = useState<PermissionMode>(null);
+  const [voiceErr, setVoiceErr] = useState<string | null>(null);
+
   useEffect(() => {
     setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => {});
     return () => {
       try { playerRef.current?.remove?.(); } catch {}
     };
   }, []);
+
+  const startRecording = async () => {
+    setVoiceErr(null);
+    try {
+      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch {
+      setVoiceErr("Could not start the microphone. Please try again.");
+    }
+  };
+
+  const onMicPress = async () => {
+    if (recState.isRecording) { await stopAndTranscribe(); return; }
+    const cur = await AudioModule.getRecordingPermissionsAsync();
+    if (cur.granted) { await startRecording(); return; }
+    setMicPerm(cur.canAskAgain ? "explain" : "blocked");
+  };
+
+  const requestMic = async () => {
+    setMicPerm(null);
+    const r = await AudioModule.requestRecordingPermissionsAsync();
+    if (r.granted) await startRecording();
+    else if (!r.canAskAgain) setMicPerm("blocked");
+  };
+
+  const stopAndTranscribe = async () => {
+    try {
+      await recorder.stop();
+      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => {});
+      const uri = recorder.uri;
+      if (!uri) throw new Error("No recording captured");
+      setTranscribing(true);
+      const isWeb = Platform.OS === "web";
+      const r = await uploadFile<{ text: string }>("/transcriptions", {
+        uri, name: isWeb ? "recording.webm" : "recording.m4a", type: isWeb ? "audio/webm" : "audio/m4a",
+      });
+      if (!r.text) { setVoiceErr("I couldn't hear anything — try speaking closer to the mic."); return; }
+      setText((t) => (t.trim() ? `${t.trim()} ${r.text}` : r.text));
+    } catch (e: any) {
+      setVoiceErr(e.message || "Transcription failed");
+    } finally {
+      setTranscribing(false);
+    }
+  };
 
   const send = async (msg?: string) => {
     const content = (msg ?? text).trim();
@@ -171,19 +224,52 @@ export default function AIChat() {
       </ScrollView>
 
       <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+        <Pressable
+          testID="chat-mic"
+          onPress={onMicPress}
+          disabled={transcribing || busy}
+          style={[styles.micBtn, recState.isRecording && styles.micBtnActive, (transcribing || busy) && { opacity: 0.4 }]}
+        >
+          {transcribing ? (
+            <ActivityIndicator size="small" color={colors.brandPrimary} />
+          ) : (
+            <Icon name={recState.isRecording ? "stop" : "microphone"} size={22} color={recState.isRecording ? colors.onError : colors.brandPrimary} />
+          )}
+        </Pressable>
         <TextInput
           testID="chat-input"
           style={styles.input}
           value={text}
           onChangeText={setText}
-          placeholder="Ask MotoResQ…"
-          placeholderTextColor={colors.muted}
+          placeholder={recState.isRecording ? "Listening… tap stop when done" : transcribing ? "Transcribing…" : "Ask or tap the mic…"}
+          placeholderTextColor={recState.isRecording ? colors.error : colors.muted}
           multiline
         />
         <Pressable testID="chat-send" onPress={() => send()} disabled={busy || !text.trim()} style={[styles.sendBtn, (!text.trim() || busy) && { opacity: 0.4 }]}>
           <Icon name="send" size={20} color={colors.onBrandPrimary} />
         </Pressable>
       </View>
+      {recState.isRecording && (
+        <View style={[styles.recBar, { paddingBottom: Math.max(insets.bottom, 10) }]} testID="chat-recording">
+          <View style={styles.recDot} />
+          <Text style={styles.recText}>Recording {Math.floor(recState.durationMillis / 1000)}s — describe what your bike is doing</Text>
+        </View>
+      )}
+      {voiceErr && !recState.isRecording && (
+        <Pressable onPress={() => setVoiceErr(null)} style={[styles.recBar, { paddingBottom: Math.max(insets.bottom, 10) }]} testID="chat-voice-error">
+          <Icon name="alert-circle-outline" size={16} color={colors.error} />
+          <Text style={styles.recText}>{voiceErr}</Text>
+        </Pressable>
+      )}
+
+      <PermissionPrompt
+        mode={micPerm}
+        icon="microphone"
+        title="Allow microphone"
+        message="Speak your bike's symptoms hands-free and MotoResQ will transcribe them into the chat."
+        onAllow={requestMic}
+        onDismiss={() => setMicPerm(null)}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -230,4 +316,9 @@ const useStyles = makeStyles((c) => ({
   inputBar: { flexDirection: "row", gap: 8, alignItems: "flex-end", padding: 12, borderTopWidth: 1, borderTopColor: c.border, backgroundColor: c.surface },
   input: { flex: 1, backgroundColor: c.surfaceTertiary, color: c.onSurface, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, maxHeight: 120, fontSize: 15, borderWidth: 1, borderColor: c.border },
   sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center" },
+  micBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: c.brandTertiary, alignItems: "center", justifyContent: "center" },
+  micBtnActive: { backgroundColor: c.error },
+  recBar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 8, backgroundColor: c.surface },
+  recDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: c.error },
+  recText: { flex: 1, fontSize: 13, color: c.onSurfaceSecondary },
 }));

@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 2 testing of MotoResQ new features (Voice STT, Bike Photo upload, Emergency SOS, Service Reminders) + refactor regression. Backend: 26/26 new pytest tests passed in test_new_features.py (Whisper /transcriptions returns 200 with text field for a WAV tone; /motorcycle/photo uploads to Emergent Object Storage and /files/{path}?token= returns the image; /emergency/contacts CRUD with 400/404 edges; /reminders correctly buckets oil→overdue (interval 5000, remaining -1000) and chain_lube→ok (remaining 300, threshold 120); PATCH /motorcycle/odometer rejects negatives). Frontend: login → home → home-sos + home-reminders + moto-card all visible; Home moto-card renders bike_photo via /api/files/<path>?token=<jwt>; SOS screen shows call-emergency + locate + add-contact — permission prompt appeared on locate, add contact modal saves and delete removes it; Reminders screen renders 8 items, odometer updates 15000→15200, rem-log-oil navigates to /maintenance-add with type=Engine oil change and odo=15200 prefilled; AI chat has chat-mic left of input — tapping it starts recording (chat-recording visible) and text send+reply still works with Speak button; Motorcycle setup shows bike-photo-box and photo-library (Change photo); More tab has menu-reminders and menu-sos, both navigate correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/test_motoresq_api.py",
+    "/app/test_reports/pytest/iteration_2.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py still ~585 lines. Iteration 1 recommendation to split routers by domain (auth, motorcycle/photo, emergency, reminders, chat/tts/stt) still stands.",
+    "STT accepts up to 25 MB but there's no per-user rate limit — a malicious user could burn Whisper credits. Consider adding a light rate limit on /transcriptions.",
+    "/files/{path} bike-photo ACL is 'owner only' — fine, but reverse look-up scans users by bike_photo path. With many users a separate objects collection with owner_id would scale better."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py (new)"
+  ],
+  "success_rate": {"backend": "100% (26/26 new + 24/24 iteration_1 regression)", "frontend": "100% of tested flows"},
+  "seed_data_creation": "Test class TestReminders creates two TEST_R_* maintenance entries (Oil at 9000, Chain lube at 14500) and deletes them in teardown. It also sets motorcycle to Yamaha MT-07 2022 odo=15000. UI test created & deleted a temporary rescue contact 'UI Test Roadside'. Existing bike_photo on the test user was reused; UI odometer update raised it to 15200 (not reverted — future runs still work since reminders logic is odometer-based, not fixed to 15000).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 4 new features (STT, bike photo, SOS, reminders) are green on backend + frontend. Test user rider@motoresq.app / rider1234 has motorcycle Yamaha MT-07 2022 odometer=15200 and bike_photo already set. New backend test file: /app/backend/tests/test_new_features.py — reruns are idempotent. Emergent Object Storage upload occasionally may return 402 (credits exhausted); test skips instead of failing in that case. New frontend testIDs: home-sos, home-reminders, sos-screen, sos-locate, sos-add-contact, contact-kind-{tow|roadside|personal}, contact-name, contact-phone, contact-save, sos-contact-<id>, sos-call-<id>, sos-sms-<id>, sos-delete-<id>, reminders-screen, rem-odometer, rem-update-odo, odo-input, odo-save, rem-item-<id>, rem-log-<id>, chat-mic, chat-recording, chat-voice-error, bike-photo-box, photo-library, menu-reminders, menu-sos. Login testIDs (from iteration 1) are login-email-input / login-password-input / login-submit-button (not login-email/login-submit).",
+  "rca_of_issue": "N/A — no bugs found."
+}

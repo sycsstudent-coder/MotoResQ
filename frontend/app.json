@@ -9,14 +9,27 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.motoapppreview.g1z2up"
+      "bundleIdentifier": "com.emergent.motoapppreview.g1z2up",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Describe bike symptoms by voice for hands-free help",
+        "NSCameraUsageDescription": "Snap a photo of your bike for your profile",
+        "NSPhotoLibraryUsageDescription": "Choose a bike photo for your profile",
+        "NSLocationWhenInUseUsageDescription": "Share your breakdown location with rescue contacts"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.emergent.motoapppreview.g1z2up"
+      "package": "com.emergent.motoapppreview.g1z2up",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -40,7 +53,21 @@
       "expo-web-browser",
       "expo-status-bar",
       "@react-native-vector-icons/material-design-icons",
-      "expo-audio"
+      [
+        "expo-audio",
+        { "microphonePermission": "Describe bike symptoms by voice for hands-free help" }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose a bike photo for your profile",
+          "cameraPermission": "Snap a photo of your bike for your profile"
+        }
+      ],
+      [
+        "expo-location",
+        { "locationWhenInUsePermission": "Share your breakdown location with rescue contacts" }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

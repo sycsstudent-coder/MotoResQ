@@ -22,6 +22,7 @@ export default function Maintenance() {
   const remove = async (id: string) => {
     await api(`/maintenance/${id}`, { method: "DELETE" });
     qc.invalidateQueries({ queryKey: ["maintenance"] });
+    qc.invalidateQueries({ queryKey: ["reminders"] });
   };
 
   return (

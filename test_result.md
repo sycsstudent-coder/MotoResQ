@@ -101,3 +101,23 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+## Iteration 2 — Voice input, Bike photo, Emergency SOS, Service reminders (June 2026)
+backend:
+  - task: "POST /api/transcriptions (Whisper STT, multipart 'file')"
+    file: "/app/backend/server.py"
+    status: implemented — curl verified (wav → 200 {text})
+  - task: "POST /api/motorcycle/photo (Emergent Object Storage) + GET /api/files/{path}?token="
+    file: "/app/backend/server.py"
+    status: implemented — curl verified (png → 200, GET returns image/png)
+  - task: "Emergency contacts CRUD /api/emergency/contacts"
+    status: implemented
+  - task: "GET /api/reminders, PATCH /api/motorcycle/odometer"
+    status: implemented
+  - refactor: DIAG_TREE/REPAIR_GUIDES moved to /app/backend/data.py; lifespan replaces on_event
+frontend:
+  - ai-chat.tsx: mic button (chat-mic) → expo-audio record → /transcriptions → fills input
+  - motorcycle-setup.tsx: bike photo (photo-library / photo-camera), shows on Home moto-card
+  - sos.tsx: call 112, find/share location, rescue contacts CRUD (modal)
+  - reminders.tsx: service schedule with progress, update odometer modal, Log service → maintenance-add prefilled
+  - Home: home-sos, home-reminders cards; More: menu-reminders, menu-sos
+test_credentials: rider@motoresq.app / rider1234

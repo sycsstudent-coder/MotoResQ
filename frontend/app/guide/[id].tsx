@@ -98,7 +98,7 @@ const useStyles = makeStyles((c) => ({
   meta: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
   chip: { flexDirection: "row", gap: 4, alignItems: "center", backgroundColor: c.surfaceTertiary, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
   chipText: { fontSize: 12, color: c.onSurfaceSecondary, fontWeight: "600" },
-  warnings: { backgroundColor: "#FEE2E2", padding: 14, borderRadius: 12, marginTop: 4, marginBottom: 8, borderWidth: 1, borderColor: "#FCA5A5" },
+  warnings: { backgroundColor: c.error + "1A", padding: 14, borderRadius: 12, marginTop: 4, marginBottom: 8, borderWidth: 1, borderColor: c.error + "66" },
   warnTitle: { color: c.error, fontWeight: "700", fontSize: 14 },
   warnText: { color: c.error, fontSize: 13, lineHeight: 20, marginTop: 2 },
   section: { fontSize: 16, fontWeight: "700", color: c.onSurface, marginTop: 18, marginBottom: 10 },

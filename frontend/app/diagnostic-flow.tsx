@@ -11,10 +11,10 @@ interface Question { id: string; q: string; options: QOption[] }
 interface Category { title: string; questions: Question[] }
 interface Result { cause: string; severity: string; guide_id: string | null }
 
-const SEVERITY_COLOR: Record<string, { bg: string; label: string }> = {
-  low: { bg: "#DCFCE7", label: "Low" },
-  medium: { bg: "#FEF3C7", label: "Medium" },
-  high: { bg: "#FEE2E2", label: "High" },
+const SEVERITY_COLOR: Record<string, { key: "success" | "warning" | "error"; label: string }> = {
+  low: { key: "success", label: "Low" },
+  medium: { key: "warning", label: "Medium" },
+  high: { key: "error", label: "High" },
 };
 
 export default function DiagnosticFlow() {
@@ -109,8 +109,8 @@ export default function DiagnosticFlow() {
             const sev = SEVERITY_COLOR[r.severity] || SEVERITY_COLOR.low;
             return (
               <View key={i} style={styles.resultCard}>
-                <View style={[styles.severity, { backgroundColor: sev.bg }]}>
-                  <Text style={styles.severityText}>{sev.label} severity</Text>
+                <View style={[styles.severity, { backgroundColor: colors[sev.key] + "26" }]}>
+                  <Text style={[styles.severityText, { color: colors[sev.key] }]}>{sev.label} severity</Text>
                 </View>
                 <Text style={styles.resultCause}>{r.cause}</Text>
                 {r.guide_id ? (
