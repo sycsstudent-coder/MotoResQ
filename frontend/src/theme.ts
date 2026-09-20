@@ -1,4 +1,4 @@
-// Design tokens for this app. Light theme only.Always modify the colors and theme to Dark, Light or Dark and Light according to the design guidelines.
+// Design tokens for this app. Black & red dark theme (default) plus a light variant; user can toggle in More.
 //
 // The keys match the "color" block of /app/design_guidelines.json. Fill the
 // values from that file (or from the user's brand colors). Keep every key; do
@@ -30,70 +30,122 @@
 // Nothing else changes; the device setting takes over automatically.
 // Feel free to add as many new colors as you need to support the design guidelines.
 
-import { useMemo } from "react";
-import { Appearance, StyleSheet, useColorScheme } from "react-native";
+import { useMemo, useSyncExternalStore } from "react";
+import { StyleSheet, useColorScheme } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export type ColorScheme = "light" | "dark";
+export type ThemePreference = ColorScheme | "system";
 
-const light = {
-  surface: "#F7F7F5",
-  onSurface: "#2C2F2D",
-  surfaceSecondary: "#FFFFFF",
-  onSurfaceSecondary: "#2C2F2D",
-  surfaceTertiary: "#EAEBE8",
-  onSurfaceTertiary: "#2C2F2D",
-  surfaceInverse: "#2C2F2D",
-  onSurfaceInverse: "#F7F7F5",
-  muted: "#747976",
+// Black & red — the app's signature look (default).
+const dark = {
+  surface: "#0B0B0D",
+  onSurface: "#F5F5F5",
+  surfaceSecondary: "#161618",
+  onSurfaceSecondary: "#EDEDED",
+  surfaceTertiary: "#202024",
+  onSurfaceTertiary: "#E0E0E0",
+  surfaceInverse: "#F5F5F5",
+  onSurfaceInverse: "#0B0B0D",
+  muted: "#9A9AA0",
 
-  brand: "#4E6A5C",
+  brand: "#E53935",
   onBrand: "#FFFFFF",
-  brandPrimary: "#4E6A5C",
+  brandPrimary: "#E53935",
   onBrandPrimary: "#FFFFFF",
-  brandSecondary: "#758F81",
-  onBrandSecondary: "#14211A",
-  brandTertiary: "#DCE5E0",
-  onBrandTertiary: "#23332A",
+  brandSecondary: "#FF6659",
+  onBrandSecondary: "#1A0000",
+  brandTertiary: "#3A1214",
+  onBrandTertiary: "#FFB4B0",
 
-  success: "#4A7C59",
+  success: "#4CAF50",
   onSuccess: "#FFFFFF",
-  warning: "#D98A44",
-  onWarning: "#2E1C0A",
-  error: "#C95252",
+  warning: "#FFB300",
+  onWarning: "#1A1200",
+  error: "#FF5252",
   onError: "#FFFFFF",
-  info: "#68706D",
-  onInfo: "#FFFFFF",
+  info: "#B0B0B8",
+  onInfo: "#0B0B0D",
 
-  border: "#E1E3E0",
-  borderStrong: "#B8BCB9",
-  divider: "#E1E3E0",
+  border: "#2A2A2F",
+  borderStrong: "#3C3C42",
+  divider: "#1E1E22",
 };
 
-export type ThemeColors = typeof light;
+// White & red — daylight variant.
+const light: typeof dark = {
+  surface: "#FAFAFA",
+  onSurface: "#111111",
+  surfaceSecondary: "#FFFFFF",
+  onSurfaceSecondary: "#1A1A1A",
+  surfaceTertiary: "#F0F0F2",
+  onSurfaceTertiary: "#2A2A2A",
+  surfaceInverse: "#111111",
+  onSurfaceInverse: "#FAFAFA",
+  muted: "#6B6B72",
 
-export const defaultScheme = "light" satisfies ColorScheme;
+  brand: "#D32F2F",
+  onBrand: "#FFFFFF",
+  brandPrimary: "#D32F2F",
+  onBrandPrimary: "#FFFFFF",
+  brandSecondary: "#C62828",
+  onBrandSecondary: "#FFFFFF",
+  brandTertiary: "#FDECEA",
+  onBrandTertiary: "#8E1B1B",
 
-export const themes: { light: ThemeColors; dark?: ThemeColors } = { light };
+  success: "#2E7D32",
+  onSuccess: "#FFFFFF",
+  warning: "#ED6C02",
+  onWarning: "#FFFFFF",
+  error: "#C62828",
+  onError: "#FFFFFF",
+  info: "#5F6368",
+  onInfo: "#FFFFFF",
 
-// In-app theme toggle, only after `dark` exists in `themes`. Call
-// setColorScheme("dark"), setColorScheme("light"), or setColorScheme(null) to
-// follow the device. Every useTheme() consumer re-renders. Persisting the
-// choice and re-applying it on launch is the toggle's job.
-export function setColorScheme(scheme: ColorScheme | null) {
-  // RN 0.86 re-reads the device scheme only for the literal "unspecified";
-  // null would pin useColorScheme() to null and the app to light.
-  Appearance.setColorScheme?.(scheme ?? "unspecified");
+  border: "#E4E4E7",
+  borderStrong: "#C9C9CF",
+  divider: "#EFEFF2",
+};
+
+export type ThemeColors = typeof dark;
+
+export const defaultScheme = "dark" satisfies ColorScheme;
+
+export const themes: { light: ThemeColors; dark: ThemeColors } = { light, dark };
+
+// ---- Theme preference store (persisted) ----
+const PREF_KEY = "motoresq_theme_pref";
+let preference: ThemePreference = defaultScheme;
+const listeners = new Set<() => void>();
+
+function emit() { listeners.forEach((l) => l()); }
+
+export function setThemePreference(pref: ThemePreference) {
+  preference = pref;
+  emit();
+  AsyncStorage.setItem(PREF_KEY, pref).catch(() => {});
 }
 
-// Keep native surfaces (alerts, pickers, navigation chrome) on the schemes this
-// app ships: light only forces light; once `dark` exists the device decides.
-// Optional call because react-native-web does not implement it.
-setColorScheme?.(themes.dark ? null : defaultScheme);
+export async function loadThemePreference() {
+  try {
+    const v = await AsyncStorage.getItem(PREF_KEY);
+    if (v === "light" || v === "dark" || v === "system") { preference = v; emit(); }
+  } catch {}
+}
+
+export function useThemePreference(): ThemePreference {
+  return useSyncExternalStore(
+    (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
+    () => preference,
+    () => preference,
+  );
+}
 
 export function useTheme(): { scheme: ColorScheme; colors: ThemeColors } {
   const system = useColorScheme();
-  const scheme: ColorScheme = system && themes[system] ? system : defaultScheme;
-  return { scheme, colors: themes[scheme] ?? themes.light };
+  const pref = useThemePreference();
+  const scheme: ColorScheme = pref === "system" ? (system === "light" ? "light" : "dark") : pref;
+  return { scheme, colors: themes[scheme] };
 }
 
 // Themed StyleSheet: returns a hook that builds the sheet from the active
@@ -106,5 +158,3 @@ export function makeStyles<T extends StyleSheet.NamedStyles<T> | StyleSheet.Name
     return useMemo(() => StyleSheet.create(factory(colors)), [colors]);
   };
 }
-
-

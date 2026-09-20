@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 3 testing complete: Black&Red dark theme (default), Light toggle & persistence, Chat history (list/open/delete), Voice/text diagnose with keyword match + Ask AI prefill, and Offline guides & diagnostics via AsyncStorage cache. Backend: 11/11 new pytest tests in test_iteration3.py pass — GET /api/chat/sessions returns [{session_id,title,last_at,count}] sorted desc; POST /chat with new session_id 't-<rand>' persists 2 msgs and appears in list with count=2 and title='Reply just OK'; DELETE /chat/sessions/{id} returns {ok:true,deleted:2} and session disappears; unknown DELETE → 404; both endpoints 401 without token; GET /chat/history/{sid} regression OK (returns [user,assistant]); regressions (guides, diagnostic/categories, root) all 200. Frontend: default home-screen bg = rgb(11,11,13) (near-black); More → appearance-light flips More screen bg to rgb(250,250,250); appearance-dark reverts; theme preference persists after full page reload (home-screen still rgb(11,11,13)). Chat history: More → menu-chat-history shows chat-history-screen with 5 existing session-<id> rows; tapping a row opens ai-chat with prior bubbles rendered and chat-new + chat-history header buttons visible; chat-new clears to the 'Hey rider!' welcome; chat-history icon re-opens list; session-delete-<id> removes the row after invalidation. Voice diagnose: diag-mic (big red button) present on Diagnose tab; typing 'brake lever feels spongy' + diag-symptom-go navigates to /diagnostic-flow?category=brakes with diag-question 'How does the brake lever feel?' visible; typing 'my seat is torn' + go shows diag-no-match card; diag-ask-ai-prefill opens /ai-chat with chat-input pre-filled 'my seat is torn'. Offline (route abort on **/api/guides/**, **/api/diagnostic/**): Repair Guides tab still lists all 12 guides from cache, offline-badge 'Offline — showing saved copy' visible; opening guide/battery renders full detail (safety warnings + steps) with offline badge; Diagnose tab shows all 6 diag-cat-* from cache with offline badge; opening a diagnostic flow renders questions with no crash / no red screen. Dark theme regression: SOS, Reminders and Maintenance screens all render black background with visible red-accented text and legible content (screenshots verified).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/test_reports/pytest/iteration_3.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now ~613 lines with 20+ routes in one module. Split into routers (auth, motorcycle, chat, diagnostic, guides, tts_stt, files) for maintainability.",
+    "prefetchOfflineContent runs fire-and-forget on tabs mount without any UI indication; consider surfacing 'Last synced …' in the More screen using offlineSyncedAt() so users know when their cache was refreshed.",
+    "chat-history delete uses api DELETE then invalidateQueries but does not optimistically remove the row nor confirm — a mis-tap on the small delete icon can silently delete a conversation. Consider an Undo snackbar or confirm dialog.",
+    "cachedGet stores under key `motoresq_cache:<path>` without a size cap or TTL — over time AsyncStorage will grow. Consider evicting entries not seen for >30d.",
+    "In offline.ts analyzeLocally duplicates the backend rule engine literally; extract a shared JSON of rules or generate the client copy from data.py to avoid drift."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py (new)",
+    "/app/test_reports/iteration_3.json (new)"
+  ],
+  "success_rate": {"backend": "100% (11/11 iteration_3 + regression on guides/diag/root)", "frontend": "100% of tested flows (theme, chat history, voice diagnose, offline guides/diag, dark-theme regression)"},
+  "seed_data_creation": "Backend test creates one chat session t-<uuid> ('Reply just OK') and deletes it in the same test class (no residue). UI test consumed & deleted one existing session (session-test) that had been left over from iteration-1 seed; the four common test sessions from prior iterations remain in DB.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "New iteration-3 testIDs: appearance-toggle, appearance-{dark|light|system}, menu-chat-history, chat-history-screen, session-<id>, session-delete-<id>, chat-new, chat-history, diag-mic, diag-symptom-input, diag-symptom-go, diag-no-match, diag-ask-ai-prefill, diag-voice-error, offline-badge (rendered via <OfflineBadge/> text 'Offline — showing saved copy'). Offline in this preview environment cannot use context.set_offline(True) because a page.reload() would re-fetch the Metro bundle and fail — instead use page.route('**/api/guides*',route=>route.abort()) plus '**/api/diagnostic/*' to keep the JS bundle alive while forcing cachedGet fallback. The offline prefetch runs on tabs layout mount (prefetchOfflineContent); allow ~4–5s after login before going 'offline'. Backend file /app/backend/tests/test_iteration3.py is idempotent — safe to re-run.",
+  "rca_of_issue": "N/A — no bugs found. Only observation: in the offline diagnostic-flow completion I answered fewer questions than the questionnaire had (Won't Start category has 3 questions) so I did not reach the results view; however the screen rendered questions correctly with no crash/red-screen, confirming the local analyzeLocally fallback path is at least reachable. Main agent may want to add a quick manual end-to-end offline diagnostic run for full confidence."
+}

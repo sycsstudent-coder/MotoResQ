@@ -5,7 +5,8 @@ import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import Icon from "@react-native-vector-icons/material-design-icons";
 import { makeStyles, useTheme } from "@/src/theme";
-import { api } from "@/src/api";
+import { cachedGet, Cached } from "@/src/offline";
+import { OfflineBadge } from "@/src/components/offline-badge";
 
 interface Guide { id: string; title: string; category: string; time: string; difficulty: string }
 
@@ -16,7 +17,8 @@ export default function Guides() {
   const router = useRouter();
   const [q, setQ] = useState("");
 
-  const { data, isLoading } = useQuery<Guide[]>({ queryKey: ["guides"], queryFn: () => api("/guides") });
+  const { data: res, isLoading } = useQuery<Cached<Guide[]>>({ queryKey: ["guides"], queryFn: () => cachedGet("/guides"), networkMode: "always" });
+  const data = res?.data;
 
   const filtered = useMemo(() => {
     if (!data) return [];
@@ -29,7 +31,8 @@ export default function Guides() {
     <View style={{ flex: 1, backgroundColor: colors.surface }} testID="guides-screen">
       <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 20 }}>
         <Text style={styles.title}>Repair Guides</Text>
-        <Text style={styles.subtitle}>Works fully offline. Downloaded once.</Text>
+        <Text style={styles.subtitle}>Saved on your phone — works with zero signal.</Text>
+        <OfflineBadge visible={!!res?.fromCache} />
         <View style={styles.searchWrap}>
           <Icon name="magnify" size={20} color={colors.muted} />
           <TextInput

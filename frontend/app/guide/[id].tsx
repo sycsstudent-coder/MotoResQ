@@ -4,7 +4,8 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import Icon from "@react-native-vector-icons/material-design-icons";
 import { makeStyles, useTheme } from "@/src/theme";
-import { api } from "@/src/api";
+import { cachedGet, Cached } from "@/src/offline";
+import { OfflineBadge } from "@/src/components/offline-badge";
 
 interface Guide {
   id: string; title: string; category: string; time: string; difficulty: string;
@@ -18,10 +19,12 @@ export default function GuideDetail() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
 
-  const { data: g, isLoading, error } = useQuery<Guide>({
+  const { data: res, isLoading, error } = useQuery<Cached<Guide>>({
     queryKey: ["guide", id],
-    queryFn: () => api(`/guides/${id}`),
+    queryFn: () => cachedGet(`/guides/${id}`),
+    networkMode: "always",
   });
+  const g = res?.data;
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
@@ -38,7 +41,8 @@ export default function GuideDetail() {
 
       {g && (
         <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + 24 }} testID="guide-detail">
-          <View style={styles.meta}>
+          <OfflineBadge visible={!!res?.fromCache} />
+          <View style={[styles.meta, res?.fromCache && { marginTop: 12 }]}>
             <Chip icon="tag-outline" label={g.category} />
             <Chip icon="clock-outline" label={g.time} />
             <Chip icon="signal-cellular-2" label={g.difficulty} />

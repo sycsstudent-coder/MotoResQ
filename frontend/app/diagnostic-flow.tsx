@@ -5,10 +5,12 @@ import { useEffect, useState } from "react";
 import Icon from "@react-native-vector-icons/material-design-icons";
 import { makeStyles, useTheme } from "@/src/theme";
 import { api } from "@/src/api";
+import { cachedGet, analyzeLocally } from "@/src/offline";
 
 interface QOption { v: string; l: string }
 interface Question { id: string; q: string; options: QOption[] }
-interface Category { title: string; questions: Question[] }
+interface Rule { if: Record<string, string>; cause: string; severity: string; guide_id: string | null }
+interface Category { title: string; questions: Question[]; rules: Rule[] }
 interface Result { cause: string; severity: string; guide_id: string | null }
 
 const SEVERITY_COLOR: Record<string, { key: "success" | "warning" | "error"; label: string }> = {
@@ -35,8 +37,8 @@ export default function DiagnosticFlow() {
   useEffect(() => {
     (async () => {
       try {
-        const data = await api<Category>(`/diagnostic/${category}`);
-        setCat(data);
+        const res = await cachedGet<Category>(`/diagnostic/${category}`);
+        setCat(res.data);
       } catch (e: any) { setErr(e.message); } finally { setLoading(false); }
     })();
   }, [category]);
@@ -54,7 +56,10 @@ export default function DiagnosticFlow() {
           method: "POST", body: JSON.stringify({ category, answers: next }),
         });
         setResults(r.results);
-      } catch (e: any) { setErr(e.message); } finally { setLoading(false); }
+      } catch {
+        // Offline: evaluate the same rules on-device
+        setResults(analyzeLocally(cat.rules || [], next));
+      } finally { setLoading(false); }
     }
   };
 

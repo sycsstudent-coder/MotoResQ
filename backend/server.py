@@ -498,6 +498,34 @@ async def chat_history(session_id: str, user: dict = Depends(get_current_user)):
     ).sort("created_at", 1).to_list(200)
     return docs
 
+@api.get("/chat/sessions")
+async def chat_sessions(user: dict = Depends(get_current_user)):
+    pipeline = [
+        {"$match": {"user_id": user["id"]}},
+        {"$sort": {"created_at": 1}},
+        {"$group": {
+            "_id": "$session_id",
+            "first_user": {"$first": {"$cond": [{"$eq": ["$role", "user"]}, "$content", None]}},
+            "messages": {"$push": {"role": "$role", "content": "$content"}},
+            "last_at": {"$max": "$created_at"},
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"last_at": -1}},
+        {"$limit": 100},
+    ]
+    out = []
+    async for s in db.chat_messages.aggregate(pipeline):
+        title = s.get("first_user") or next((m["content"] for m in s["messages"] if m["role"] == "user"), "Conversation")
+        out.append({"session_id": s["_id"], "title": title[:80], "last_at": s["last_at"], "count": s["count"]})
+    return out
+
+@api.delete("/chat/sessions/{session_id}")
+async def delete_chat_session(session_id: str, user: dict = Depends(get_current_user)):
+    r = await db.chat_messages.delete_many({"user_id": user["id"], "session_id": session_id})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Session not found")
+    return {"ok": True, "deleted": r.deleted_count}
+
 # ---------- TTS ----------
 @api.post("/tts")
 async def tts(body: TTSIn, user: dict = Depends(get_current_user)):

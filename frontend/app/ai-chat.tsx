@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import Icon from "@react-native-vector-icons/material-design-icons";
-import { createAudioPlayer, setAudioModeAsync, AudioModule, RecordingPresets, useAudioRecorder, useAudioRecorderState } from "expo-audio";
+import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import { makeStyles, useTheme } from "@/src/theme";
-import { api, uploadFile } from "@/src/api";
+import { api } from "@/src/api";
 import { useAuth } from "@/src/auth-context";
 import { readToken } from "@/src/token";
-import { PermissionPrompt, PermissionMode } from "@/src/components/permission-prompt";
+import { PermissionPrompt } from "@/src/components/permission-prompt";
+import { useVoiceInput } from "@/src/use-voice-input";
 
 interface Msg { role: "user" | "assistant"; content: string; id: string }
 
@@ -27,22 +28,19 @@ export default function AIChat() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ session?: string; prefill?: string }>();
 
-  const sessionRef = useRef<string>(`s-${Date.now()}`);
+  const sessionRef = useRef<string>(params.session || `s-${Date.now()}`);
   const scrollRef = useRef<ScrollView | null>(null);
   const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
 
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(params.prefill || "");
   const [busy, setBusy] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(!!params.session);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
 
-  // Voice input (Whisper STT)
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recState = useAudioRecorderState(recorder);
-  const [transcribing, setTranscribing] = useState(false);
-  const [micPerm, setMicPerm] = useState<PermissionMode>(null);
-  const [voiceErr, setVoiceErr] = useState<string | null>(null);
+  const voice = useVoiceInput((t) => setText((cur) => (cur.trim() ? `${cur.trim()} ${t}` : t)));
 
   useEffect(() => {
     setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => {});
@@ -51,49 +49,20 @@ export default function AIChat() {
     };
   }, []);
 
-  const startRecording = async () => {
-    setVoiceErr(null);
-    try {
-      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
-      await recorder.prepareToRecordAsync();
-      recorder.record();
-    } catch {
-      setVoiceErr("Could not start the microphone. Please try again.");
-    }
-  };
+  useEffect(() => {
+    if (!params.session) return;
+    (async () => {
+      try {
+        const docs = await api<{ id: string; role: "user" | "assistant"; content: string }[]>(`/chat/history/${params.session}`);
+        setMessages(docs.map((d) => ({ id: d.id, role: d.role, content: d.content })));
+      } catch {} finally { setLoadingHistory(false); }
+    })();
+  }, [params.session]);
 
-  const onMicPress = async () => {
-    if (recState.isRecording) { await stopAndTranscribe(); return; }
-    const cur = await AudioModule.getRecordingPermissionsAsync();
-    if (cur.granted) { await startRecording(); return; }
-    setMicPerm(cur.canAskAgain ? "explain" : "blocked");
-  };
-
-  const requestMic = async () => {
-    setMicPerm(null);
-    const r = await AudioModule.requestRecordingPermissionsAsync();
-    if (r.granted) await startRecording();
-    else if (!r.canAskAgain) setMicPerm("blocked");
-  };
-
-  const stopAndTranscribe = async () => {
-    try {
-      await recorder.stop();
-      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => {});
-      const uri = recorder.uri;
-      if (!uri) throw new Error("No recording captured");
-      setTranscribing(true);
-      const isWeb = Platform.OS === "web";
-      const r = await uploadFile<{ text: string }>("/transcriptions", {
-        uri, name: isWeb ? "recording.webm" : "recording.m4a", type: isWeb ? "audio/webm" : "audio/m4a",
-      });
-      if (!r.text) { setVoiceErr("I couldn't hear anything — try speaking closer to the mic."); return; }
-      setText((t) => (t.trim() ? `${t.trim()} ${r.text}` : r.text));
-    } catch (e: any) {
-      setVoiceErr(e.message || "Transcription failed");
-    } finally {
-      setTranscribing(false);
-    }
+  const newChat = () => {
+    sessionRef.current = `s-${Date.now()}`;
+    setMessages([]);
+    setText("");
   };
 
   const send = async (msg?: string) => {
@@ -176,7 +145,12 @@ export default function AIChat() {
           <Text style={styles.headerTitle}>AI Assistant</Text>
           <Text style={styles.headerSub}>Claude Sonnet 4.6</Text>
         </View>
-        <View style={{ width: 44 }} />
+        <Pressable testID="chat-new" onPress={newChat} style={styles.back}>
+          <Icon name="plus-box-outline" size={22} color={colors.onSurface} />
+        </Pressable>
+        <Pressable testID="chat-history" onPress={() => router.push("/chat-history")} style={styles.back}>
+          <Icon name="history" size={24} color={colors.onSurface} />
+        </Pressable>
       </View>
 
       <ScrollView
@@ -186,7 +160,8 @@ export default function AIChat() {
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
         testID="chat-messages"
       >
-        {messages.length === 0 && (
+        {loadingHistory && <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} />}
+        {messages.length === 0 && !loadingHistory && (
           <View style={styles.welcome}>
             <View style={styles.robotIcon}><Icon name="robot-happy-outline" size={32} color={colors.brandPrimary} /></View>
             <Text style={styles.welcomeTitle}>Hey rider!</Text>
@@ -226,14 +201,14 @@ export default function AIChat() {
       <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 10) }]}>
         <Pressable
           testID="chat-mic"
-          onPress={onMicPress}
-          disabled={transcribing || busy}
-          style={[styles.micBtn, recState.isRecording && styles.micBtnActive, (transcribing || busy) && { opacity: 0.4 }]}
+          onPress={voice.toggle}
+          disabled={voice.transcribing || busy}
+          style={[styles.micBtn, voice.isRecording && styles.micBtnActive, (voice.transcribing || busy) && { opacity: 0.4 }]}
         >
-          {transcribing ? (
+          {voice.transcribing ? (
             <ActivityIndicator size="small" color={colors.brandPrimary} />
           ) : (
-            <Icon name={recState.isRecording ? "stop" : "microphone"} size={22} color={recState.isRecording ? colors.onError : colors.brandPrimary} />
+            <Icon name={voice.isRecording ? "stop" : "microphone"} size={22} color={voice.isRecording ? colors.onError : colors.brandPrimary} />
           )}
         </Pressable>
         <TextInput
@@ -241,34 +216,34 @@ export default function AIChat() {
           style={styles.input}
           value={text}
           onChangeText={setText}
-          placeholder={recState.isRecording ? "Listening… tap stop when done" : transcribing ? "Transcribing…" : "Ask or tap the mic…"}
-          placeholderTextColor={recState.isRecording ? colors.error : colors.muted}
+          placeholder={voice.isRecording ? "Listening… tap stop when done" : voice.transcribing ? "Transcribing…" : "Ask or tap the mic…"}
+          placeholderTextColor={voice.isRecording ? colors.error : colors.muted}
           multiline
         />
         <Pressable testID="chat-send" onPress={() => send()} disabled={busy || !text.trim()} style={[styles.sendBtn, (!text.trim() || busy) && { opacity: 0.4 }]}>
           <Icon name="send" size={20} color={colors.onBrandPrimary} />
         </Pressable>
       </View>
-      {recState.isRecording && (
+      {voice.isRecording && (
         <View style={[styles.recBar, { paddingBottom: Math.max(insets.bottom, 10) }]} testID="chat-recording">
           <View style={styles.recDot} />
-          <Text style={styles.recText}>Recording {Math.floor(recState.durationMillis / 1000)}s — describe what your bike is doing</Text>
+          <Text style={styles.recText}>Recording {voice.durationSec}s — describe what your bike is doing</Text>
         </View>
       )}
-      {voiceErr && !recState.isRecording && (
-        <Pressable onPress={() => setVoiceErr(null)} style={[styles.recBar, { paddingBottom: Math.max(insets.bottom, 10) }]} testID="chat-voice-error">
+      {voice.error && !voice.isRecording && (
+        <Pressable onPress={voice.clearError} style={[styles.recBar, { paddingBottom: Math.max(insets.bottom, 10) }]} testID="chat-voice-error">
           <Icon name="alert-circle-outline" size={16} color={colors.error} />
-          <Text style={styles.recText}>{voiceErr}</Text>
+          <Text style={styles.recText}>{voice.error}</Text>
         </Pressable>
       )}
 
       <PermissionPrompt
-        mode={micPerm}
+        mode={voice.permMode}
         icon="microphone"
         title="Allow microphone"
         message="Speak your bike's symptoms hands-free and MotoResQ will transcribe them into the chat."
-        onAllow={requestMic}
-        onDismiss={() => setMicPerm(null)}
+        onAllow={voice.requestPermission}
+        onDismiss={voice.dismissPermission}
       />
     </KeyboardAvoidingView>
   );

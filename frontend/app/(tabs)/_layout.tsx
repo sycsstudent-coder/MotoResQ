@@ -1,9 +1,13 @@
 import { Tabs } from "expo-router";
+import { useEffect } from "react";
 import Icon from "@react-native-vector-icons/material-design-icons";
 import { useTheme } from "@/src/theme";
+import { prefetchOfflineContent } from "@/src/offline";
 
 export default function TabsLayout() {
   const { colors } = useTheme();
+  // Warm the on-device cache so guides & diagnostics open with zero signal.
+  useEffect(() => { prefetchOfflineContent(); }, []);
   return (
     <Tabs
       screenOptions={{

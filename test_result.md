@@ -121,3 +121,13 @@ frontend:
   - reminders.tsx: service schedule with progress, update odometer modal, Log service → maintenance-add prefilled
   - Home: home-sos, home-reminders cards; More: menu-reminders, menu-sos
 test_credentials: rider@motoresq.app / rider1234
+
+## Iteration 3 — Black & Red theme + light toggle, Chat history, Offline guides, Voice diagnose
+backend:
+  - GET /api/chat/sessions (aggregated per session: session_id,title,last_at,count), DELETE /api/chat/sessions/{id}
+frontend:
+  - theme.ts: dark (black/red) default + light variant; More > Appearance toggle (appearance-dark/light/system), persisted AsyncStorage
+  - ai-chat.tsx: ?session= loads history, ?prefill= prefills input, header chat-new / chat-history buttons; uses src/use-voice-input.ts
+  - chat-history.tsx: list sessions (session-<id>), delete (session-delete-<id>), tap → /ai-chat?session=
+  - src/offline.ts: cachedGet (network-first, AsyncStorage fallback), prefetch on tabs mount, analyzeLocally fallback; OfflineBadge on guides/diagnose
+  - diagnose.tsx: diag-mic, diag-symptom-input + diag-symptom-go keyword → category; diag-no-match → Ask AI prefill
